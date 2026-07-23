@@ -277,6 +277,7 @@ async function loadProjects() {
       try {
         await api(`/api/projects/${id}/register-webhook`, { method: 'POST' });
         resultEl.textContent = 'Webhook registered ✓';
+        await loadProjects();
       } catch (err) {
         resultEl.textContent = err.message;
       }
@@ -296,6 +297,7 @@ async function loadProjects() {
       try {
         await api(`/api/projects/${id}/webhook/${hookId}`, { method: 'DELETE' });
         resultEl.textContent = 'Deleted ✓ — click "Register ACC webhook" to create a fresh one.';
+        await loadProjects();
       } catch (err) {
         resultEl.textContent = err.message;
       }
@@ -309,6 +311,7 @@ async function loadProjects() {
       try {
         const { hookId } = await api(`/api/projects/${id}/relink-webhook`, { method: 'POST' });
         resultEl.textContent = `Relinked ✓ (hookId: ${hookId})`;
+        await loadProjects();
       } catch (err) {
         resultEl.textContent = err.data?.error || err.message;
       }

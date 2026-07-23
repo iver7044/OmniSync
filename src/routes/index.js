@@ -223,6 +223,7 @@ router.post('/api/projects/:id/register-test-webhook', requireAdmin, async (req,
 router.delete('/api/projects/:id/webhook/:hookId', requireAdmin, async (req, res) => {
   try {
     await accService.deleteWebhook(req.session.userId, req.params.hookId);
+    await pool.query('UPDATE projects SET webhook_id = NULL WHERE id = $1 AND webhook_id = $2', [req.params.id, req.params.hookId]);
     res.json({ ok: true });
   } catch (err) {
     if (err instanceof ReconnectRequiredError) {
