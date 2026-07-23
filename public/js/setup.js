@@ -262,6 +262,7 @@ async function loadProjects() {
       <span>Revizto: ${p.revizto_project_uuid} (${p.revizto_region})</span>
       <span>ACC: ${p.acc_project_id}</span>
       <button data-id="${p.id}" class="btn secondary register-webhook-btn">Register ACC webhook</button>
+      <button data-id="${p.id}" class="btn secondary check-webhook-btn">Check webhook status</button>
       <span class="webhook-result" data-id="${p.id}"></span>
     `;
     list.appendChild(row);
@@ -276,6 +277,19 @@ async function loadProjects() {
         resultEl.textContent = 'Webhook registered ✓';
       } catch (err) {
         resultEl.textContent = err.message;
+      }
+    });
+  });
+  list.querySelectorAll('.check-webhook-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const resultEl = document.querySelector(`.webhook-result[data-id="${id}"]`);
+      resultEl.textContent = 'Checking...';
+      try {
+        const { hook } = await api(`/api/projects/${id}/webhook-status`);
+        resultEl.innerHTML = `status: <strong>${hook.status}</strong>, event: ${hook.event}, callback: ${hook.callbackUrl}, last updated: ${hook.lastUpdatedDate}`;
+      } catch (err) {
+        resultEl.textContent = err.data?.error || err.message;
       }
     });
   });

@@ -157,6 +157,22 @@ router.get('/api/projects/:id/linked-issues', requireLogin, async (req, res) => 
   }
 });
 
+router.get('/api/projects/:id/webhook-status', requireAdmin, async (req, res) => {
+  const project = await _getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!project.webhook_id) return res.status(404).json({ error: 'No webhook registered for this project yet' });
+  try {
+    const hook = await accService.getWebhookStatus(req.session.userId, project.webhook_id);
+    res.json({ hook });
+  } catch (err) {
+    if (err instanceof ReconnectRequiredError) {
+      return res.status(409).json({ error: `Reconnect required: ${err.provider}`, reason: err.reason });
+    }
+    console.error('[webhook-status] Failed:', err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data?.detail || err.message });
+  }
+});
+
 // Actually tells ACC to start calling our /webhook/acc endpoint. Requires
 // PUBLIC_BASE_URL to be a real internet-reachable HTTPS URL — this will
 // fail (as it should) if run against localhost, since ACC's servers can't

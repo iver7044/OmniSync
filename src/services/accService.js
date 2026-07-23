@@ -117,6 +117,20 @@ async function registerWebhook(userId, project, callbackUrl) {
   return data;
 }
 
+/**
+ * Fetches the real, current status of a registered webhook straight from
+ * ACC — for diagnosing "it fired once, then stopped" without guessing.
+ * Returns whatever Autodesk's own API says (status, dates, etc.).
+ */
+async function getWebhookStatus(userId, hookId) {
+  const token = await getValidAccToken(userId);
+  const { data } = await axios.get(
+    `${APS_BASE}/webhooks/v1/systems/autodesk.construction.issues/events/issue.updated-1.0/hooks/${hookId}`,
+    { headers: { Authorization: `Bearer ${token}`, 'x-ads-region': 'US' } }
+  );
+  return data;
+}
+
 // ─── Hubs / Projects (Data Management API — for the "browse ACC" dropdowns) ─
 
 async function getHubs(userId) {
@@ -144,6 +158,7 @@ module.exports = {
   getIssueSubtypes,
   getProjectMembers,
   registerWebhook,
+  getWebhookStatus,
   getHubs,
   getHubProjects,
 };
