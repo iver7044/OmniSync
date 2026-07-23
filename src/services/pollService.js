@@ -1,0 +1,42 @@
+/**
+ * services/pollService.js
+ * Automatic re-sync of already-LINKED issues, every 2 minutes by default.
+ * This does NOT push new/unlinked issues — that stays a manual, explicit
+ * choice (the "Select issues to sync" flow). Once an issue is linked,
+ * this keeps it in sync going forward without further clicks, matching
+ * the "manual to link, automatic after" design.
+ */
+const cron = require('node-cron');
+const pool = require('../db/pool');
+const syncService = require('./syncService');
+const { ReconnectRequiredError } = require('./authManager');
+
+async function pollAllProjects() {
+  const { rows: projects } = await pool.query('SELECT * FROM projects WHERE owner_user_id IS NOT NULL');
+  for (const project of projects) {
+    try {
+      const results = await syncService.pushLinkedIssues(project.owner_user_id, project);
+      if (!results.length) continue; // nothing linked yet — normal, not worth logging every cycle
+      const errors = results.filter((r) => r.action === 'error');
+      console.log(`[poll] "${project.name}": ${results.length} linked issue(s) re-synced, ${errors.length} errors`);
+    } catch (err) {
+      if (err instanceof ReconnectRequiredError) {
+        console.warn(`[poll] Project "${project.name}" owner needs to reconnect ${err.provider}: ${err.reason}`);
+      } else {
+        console.error(`[poll] Project "${project.name}" failed:`, err.message);
+      }
+    }
+  }
+}
+
+function startPolling() {
+  if (process.env.POLL_ENABLED === 'false') {
+    console.log('[poll] Automatic re-sync of linked issues disabled (POLL_ENABLED=false)');
+    return;
+  }
+  const schedule = process.env.POLL_CRON || '*/2 * * * *'; // every 2 minutes by default
+  console.log(`[poll] Automatic re-sync of linked issues enabled: ${schedule}`);
+  cron.schedule(schedule, pollAllProjects);
+}
+
+module.exports = { startPolling, pollAllProjects };

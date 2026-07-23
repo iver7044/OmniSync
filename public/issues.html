@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Issues — Revizto ↔ ACC Sync</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div id="sidebar-mount"></div>
+  <div id="app" class="container container-wide">
+    <header class="app-header">
+      <h1>Issues</h1>
+    </header>
+
+    <div id="signed-out-notice" class="card hidden">
+      <p>Sign in and connect your accounts on the <a href="/account">My Connections page</a> first.</p>
+    </div>
+
+    <div id="board-app" class="hidden">
+      <div class="card project-picker-card">
+        <label for="project-select">Project</label>
+        <select id="project-select"></select>
+        <button id="refresh-board-btn" class="btn secondary">Refresh</button>
+        <div class="stat-strip" id="issues-stat-strip">
+          <span class="stat-pill"><span id="stat-revizto-count">—</span> Revizto</span>
+          <span class="stat-pill"><span id="stat-acc-count">—</span> ACC</span>
+          <span class="stat-pill"><span id="stat-synced-count">—</span> Synced</span>
+          <span class="stat-pill stat-pill-error" id="stat-error-pill"><span id="stat-error-count">—</span> Errors</span>
+        </div>
+      </div>
+
+      <div class="card filters-card">
+        <div class="filter-group">
+          <label>Status</label>
+          <select id="filter-status"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
+          <label>Stamp category</label>
+          <select id="filter-stampCategory"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
+          <label>Issue type</label>
+          <select id="filter-issueType"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
+          <label>Stamp</label>
+          <select id="filter-stamp"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
+          <label>Assignee</label>
+          <select id="filter-assignee"><option value="">All</option></select>
+        </div>
+        <div class="filter-group">
+          <label>Tag</label>
+          <select id="filter-tags"><option value="">All</option></select>
+        </div>
+      </div>
+
+      <div class="card board-card">
+        <div class="board-header">
+          <span>Revizto</span>
+          <span></span>
+          <span>ACC</span>
+        </div>
+        <div id="board-rows"></div>
+        <div id="board-empty" class="hint hidden">No issues match the current filters.</div>
+        <div id="board-actions" class="hidden">
+          <button id="link-selected-btn" class="btn">Link &amp; push selected</button>
+          <span id="link-result" class="result-text"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/js/nav.js"></script>
+  <script src="/js/issues.js"></script>
+</body>
+</html>

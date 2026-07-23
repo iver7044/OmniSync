@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Project Setup — Revizto ↔ ACC Sync</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div id="sidebar-mount"></div>
+  <div id="app" class="container container-wide">
+    <header class="app-header">
+      <h1>Project Setup <span class="badge badge-warning">Admin</span></h1>
+      <p class="app-sub">Map Revizto projects to ACC projects. Mistakes here affect the whole team — that's why it's admin-only.</p>
+    </header>
+
+    <section class="card" id="warnings-card">
+      <h2>Mapping warnings</h2>
+      <label for="active-project-select">Project:</label>
+      <select id="active-project-select"><option value="">Select a project</option></select>
+      <div id="setup-warnings" class="hidden"></div>
+    </section>
+
+    <div class="setup-columns">
+      <div class="setup-col">
+        <section class="card">
+          <h2>Your Revizto license</h2>
+          <p class="hint">Needed to browse your Revizto projects below when adding a pairing. Connect Revizto first on <a href="/account">My Connections</a> if this is empty.</p>
+          <div class="conn-row">
+            <span class="conn-label">License</span>
+            <span id="license-status" class="badge badge-neutral">—</span>
+            <select id="license-select">
+              <option value="">Loading your licenses...</option>
+            </select>
+            <button id="license-save-btn" class="btn">Save</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>Projects</h2>
+          <div id="projects-list"></div>
+
+          <details>
+            <summary>+ Add a project pairing</summary>
+            <form id="project-form">
+              <input name="name" placeholder="Display name (e.g. West Tower)" required />
+
+              <label>Revizto project:</label>
+              <select id="revizto-project-select" name="revizto_project_uuid" required>
+                <option value="">Loading your Revizto projects...</option>
+              </select>
+              <button type="button" id="revizto-project-refresh" class="btn secondary">Refresh list</button>
+              <div id="revizto-project-error" class="hint"></div>
+
+              <input type="hidden" name="revizto_region" id="revizto-region-hidden" />
+
+              <label>ACC Hub ID:</label>
+              <input name="acc_hub_id" id="acc-hub-manual" placeholder="ACC Hub ID (b.xxxx)" required />
+              <label>ACC Project ID:</label>
+              <input name="acc_project_id" id="acc-project-manual" placeholder="ACC Project ID (b.xxxx)" required />
+              <span class="hint">Dropdown selection for these is built but disabled until your ACC Custom Integration is approved — see README.</span>
+
+              <input name="acc_default_subtype_id" placeholder="Default ACC issue subtype ID (optional)" />
+              <label><input type="checkbox" name="makeMeOwner" checked /> Use my connection for automated/background syncs on this project</label>
+              <button type="submit" class="btn">Add project</button>
+            </form>
+          </details>
+        </section>
+      </div>
+
+      <div class="setup-col">
+        <section class="card">
+          <h2>Field mapping</h2>
+          <p class="hint">Revizto and ACC use different status/type vocabularies — configure how they map for each project. Unconfigured statuses/types fall back to built-in defaults. Uses the project selected above.</p>
+
+          <div id="mapping-panels" class="hidden">
+            <h3>Status mapping</h3>
+            <p class="hint">Revizto statuses shown are only ones currently in use on this project's issues (not the full workflow list). ACC statuses are its fixed set.</p>
+            <div id="status-map-rows"></div>
+            <button id="save-status-map-btn" class="btn secondary">Save status mapping</button>
+            <span id="status-map-result" class="result-text"></span>
+
+            <h3>Issue type mapping</h3>
+            <p class="hint">Map each Revizto stamp to the matching ACC issue type.</p>
+            <div id="type-map-rows"></div>
+            <button id="add-type-row-btn" class="btn secondary">+ Add row</button>
+            <button id="save-type-map-btn" class="btn secondary">Save type mapping</button>
+            <span id="type-map-result" class="result-text"></span>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+  <script src="/js/nav.js"></script>
+  <script src="/js/setup.js"></script>
+</body>
+</html>

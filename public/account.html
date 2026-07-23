@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>My Connections — Revizto ↔ ACC Sync</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div id="sidebar-mount"></div>
+  <div id="app" class="container">
+    <header class="app-header">
+      <h1>My Connections</h1>
+      <p class="app-sub">Personal to your account — every team member connects their own.</p>
+    </header>
+
+    <section id="identify-section" class="card">
+      <div class="step-label">Step 1</div>
+      <h2>Sign in</h2>
+      <div class="field-row">
+        <input id="email-input" type="email" placeholder="you@company.com" />
+        <button id="identify-btn" class="btn">Continue</button>
+      </div>
+      <div id="whoami" class="whoami"></div>
+    </section>
+
+    <section id="connections-section" class="card hidden">
+      <div class="step-label">Step 2</div>
+      <h2>Connections</h2>
+      <div class="conn-row">
+        <span class="conn-label">Autodesk / ACC</span>
+        <span id="acc-status" class="badge badge-neutral">—</span>
+        <a id="acc-connect-btn" href="/auth/acc" class="btn">Connect ACC</a>
+      </div>
+      <div class="conn-row">
+        <span class="conn-label">Revizto</span>
+        <span id="revizto-status" class="badge badge-neutral">—</span>
+        <button id="revizto-connect-btn" class="btn">Connect Revizto</button>
+      </div>
+      <div id="revizto-code-panel" class="hidden subpanel">
+        <p>1. A Revizto login tab just opened — on that page, select your region, sign in, and copy the code shown.</p>
+        <p>2. Which region did you select there?</p>
+        <input id="revizto-region-input" list="revizto-region-suggestions" placeholder="e.g. virginia" value="virginia" />
+        <datalist id="revizto-region-suggestions">
+          <option value="virginia">North America</option>
+          <option value="ireland">Europe</option>
+          <option value="sydney">Australia (unconfirmed subdomain — verify if used)</option>
+        </datalist>
+        <p>3. Paste the access code here within 15 minutes:</p>
+        <input id="revizto-code-input" type="text" placeholder="access code" />
+        <button id="revizto-submit-btn" class="btn">Submit code</button>
+        <div id="revizto-exchange-result" class="result-text"></div>
+      </div>
+    </section>
+  </div>
+  <script src="/js/nav.js"></script>
+  <script src="/js/account.js"></script>
+</body>
+</html>

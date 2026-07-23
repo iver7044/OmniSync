@@ -1,0 +1,26 @@
+{
+  "name": "revizto-acc-sync",
+  "version": "2.0.0",
+  "description": "Bidirectional issue sync between Revizto and Autodesk Construction Cloud (multi-user, DB-backed)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "migrate": "node src/db/migrate.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "connect-pg-simple": "^10.0.0",
+    "cookie-parser": "^1.4.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "form-data": "^4.0.5",
+    "node-cron": "^4.6.0",
+    "nodemailer": "^9.0.3",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}

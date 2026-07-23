@@ -1,0 +1,377 @@
+/**
+ * services/syncService.js
+ * Orchestrates the actual sync between one Revizto project and one ACC
+ * project. sync_map now lives in Postgres instead of syncMap.json, so it
+ * survives restarts and is visible from any machine/instance.
+ */
+const pool = require('../db/pool');
+const accService = require('./accService');
+const reviztoService = require('./reviztoService');
+const fieldMapping = require('./fieldMapping');
+const tokenStore = require('./tokenStore');
+
+// ─── sync_map helpers ────────────────────────────────────────────────
+
+async function getAccIdForRevizto(projectId, reviztoIssueId) {
+  const { rows } = await pool.query(
+    'SELECT acc_issue_id FROM sync_map WHERE project_id = $1 AND revizto_issue_id = $2',
+    [projectId, String(reviztoIssueId)]
+  );
+  return rows[0]?.acc_issue_id || null;
+}
+
+async function getReviztoIdForAcc(projectId, accIssueId) {
+  const { rows } = await pool.query(
+    'SELECT revizto_issue_id FROM sync_map WHERE project_id = $1 AND acc_issue_id = $2',
+    [projectId, accIssueId]
+  );
+  return rows[0]?.revizto_issue_id || null;
+}
+
+async function recordLink(projectId, reviztoIssueId, accIssueId) {
+  await pool.query(
+    `INSERT INTO sync_map (project_id, revizto_issue_id, acc_issue_id, last_synced_at, last_error, last_error_at)
+     VALUES ($1, $2, $3, now(), NULL, NULL)
+     ON CONFLICT (project_id, revizto_issue_id) DO UPDATE SET
+       acc_issue_id = EXCLUDED.acc_issue_id, last_synced_at = now(), last_error = NULL, last_error_at = NULL`,
+    [projectId, String(reviztoIssueId), accIssueId]
+  );
+}
+
+async function clearSyncError(projectId, reviztoIssueId) {
+  await pool.query(
+    'UPDATE sync_map SET last_error = NULL, last_error_at = NULL, last_synced_at = now() WHERE project_id = $1 AND revizto_issue_id = $2',
+    [projectId, String(reviztoIssueId)]
+  );
+}
+
+async function recordSyncError(projectId, reviztoIssueId, message) {
+  // Only meaningful for issues that are already linked (have a sync_map
+  // row) — an issue that failed before ever being linked has nowhere to
+  // persist the error against, and still shows the failure transiently
+  // in the UI response instead.
+  await pool.query(
+    'UPDATE sync_map SET last_error = $3, last_error_at = now() WHERE project_id = $1 AND revizto_issue_id = $2',
+    [projectId, String(reviztoIssueId), message]
+  );
+}
+
+// ─── assignee resolution (email -> Autodesk user ID) ─────────────────
+
+async function makeAssigneeResolver(userId, project) {
+  const { rows: manualRows } = await pool.query(
+    'SELECT email, acc_autodesk_id FROM user_map WHERE project_id = $1',
+    [project.id]
+  );
+  const manualMap = Object.fromEntries(manualRows.map((r) => [r.email.toLowerCase(), r.acc_autodesk_id]));
+
+  let apiMap = null;
+  return async (email) => {
+    const key = email.toLowerCase();
+    if (manualMap[key]) return manualMap[key];
+    if (!apiMap) {
+      try {
+        const members = await accService.getProjectMembers(userId, project);
+        apiMap = {};
+        for (const m of members) if (m.email && m.autodeskId) apiMap[m.email.toLowerCase()] = m.autodeskId;
+      } catch (err) {
+        // Construction Admin API access is separate from Issues API access
+        // — a user can create issues without being able to list project
+        // members. Don't let that block the issue push; just skip the
+        // assignee for this run.
+        console.warn('[sync] Could not look up ACC project members (skipping assignee):', err.response?.data?.detail || err.message);
+        apiMap = {};
+      }
+    }
+    return apiMap[key] || null;
+  };
+}
+
+// ─── Push: Revizto issue -> ACC (create or update) ────────────────────
+
+async function pushIssueToAcc(userId, project, reviztoIssue) {
+  const existingAccId = await getAccIdForRevizto(project.id, reviztoIssue.id);
+
+  const subtypes = await accService.getIssueSubtypes(userId, project);
+  const subtypeLookup = Object.fromEntries(subtypes.map((s) => [`${s.issueTypeTitle} > ${s.title}`, s.id]));
+
+  const [customStatusMap, customTypeMap] = await Promise.all([
+    fieldMapping.getStatusMap(project.id),
+    fieldMapping.getTypeMap(project.id),
+  ]);
+
+  // customStatusName is a plain, ready-to-use string Revizto returns
+  // alongside the UUID version (customStatus) — confirmed from a real raw
+  // issue response. No UUID resolution needed for this.
+  const reviztoStatusName = reviztoService.unwrap(reviztoIssue.customStatusName) ?? null;
+
+  // Resolves email -> Autodesk user ID for both assignee and watchers.
+  // Was disabled for a while after an earlier bug where a failure here
+  // (Construction Admin API access, separate from Issues API access)
+  // took down the whole push — that's fixed (see makeAssigneeResolver's
+  // try/catch), so this is safe to re-enable. Still genuinely unverified
+  // whether Construction Admin API requires the ACC Custom Integration
+  // the same way Data Management API discovery did — if this starts
+  // failing broadly, that's the first thing to check.
+  const assigneeResolver = await makeAssigneeResolver(userId, project);
+
+  const payload = await reviztoService.toAccIssue(reviztoIssue, {
+    subtypeLookup,
+    defaultSubtypeId: project.acc_default_subtype_id,
+    customStatusMap,
+    customTypeMap,
+    reviztoStatusName,
+    assigneeResolver,
+  });
+
+  if (existingAccId) {
+    const updated = await accService.updateIssue(userId, project, existingAccId, payload);
+    await clearSyncError(project.id, reviztoIssue.id);
+    return { action: 'updated', accIssue: updated };
+  }
+
+  const created = await accService.createIssue(userId, project, payload);
+  await recordLink(project.id, reviztoIssue.id, created.id);
+  return { action: 'created', accIssue: created };
+}
+
+async function pushAllOpenIssues(userId, project) {
+  const issues = await reviztoService.getIssues(userId, project.revizto_region, project.revizto_project_uuid);
+  return _pushIssueList(userId, project, issues);
+}
+
+/**
+ * Push only specific Revizto issues (by ID), chosen by the user in the UI,
+ * rather than everything open in the project.
+ */
+async function pushSelectedIssues(userId, project, issueIds) {
+  const wanted = new Set(issueIds.map(String));
+  const allIssues = await reviztoService.getIssues(userId, project.revizto_region, project.revizto_project_uuid);
+  const selected = allIssues.filter((issue) => wanted.has(String(issue.id)));
+  return _pushIssueList(userId, project, selected);
+}
+
+async function _pushIssueList(userId, project, issues) {
+  const results = [];
+  for (const issue of issues) {
+    try {
+      results.push({ reviztoId: issue.id, ...(await pushIssueToAcc(userId, project, issue)) });
+    } catch (err) {
+      const message = err.response?.data?.errors?.[0]?.detail || err.message;
+      console.error(`[sync] Failed to push Revizto issue ${issue.id} to ACC:`, JSON.stringify(err.response?.data) || err.message);
+      // Only persists if this issue already has a sync_map row (i.e. was
+      // already linked) — a brand-new link that fails on first attempt
+      // has nowhere to persist against yet, and just shows transiently.
+      await recordSyncError(project.id, issue.id, message).catch(() => {});
+      results.push({ reviztoId: issue.id, action: 'error', error: message });
+    }
+  }
+  return results;
+}
+
+/**
+ * Re-push every issue that's already linked (has a sync_map row) for a
+ * project — this is what the 2-minute poller calls. Unlike
+ * pushAllOpenIssues, this never creates new links; it only updates
+ * issues the user has already chosen to link.
+ */
+async function pushLinkedIssues(userId, project) {
+  const { rows } = await pool.query('SELECT revizto_issue_id FROM sync_map WHERE project_id = $1', [project.id]);
+  if (!rows.length) return [];
+  const results = [];
+  for (const row of rows) {
+    try {
+      const issue = await reviztoService.getIssue(userId, project.revizto_region, project.revizto_project_uuid, row.revizto_issue_id);
+      results.push({ reviztoId: issue.id, ...(await pushIssueToAcc(userId, project, issue)) });
+    } catch (err) {
+      const message = err.response?.data?.errors?.[0]?.detail || err.message;
+      console.error(`[sync] Failed to re-push linked issue ${row.revizto_issue_id}:`, JSON.stringify(err.response?.data) || err.message);
+      await recordSyncError(project.id, row.revizto_issue_id, message).catch(() => {});
+      results.push({ reviztoId: row.revizto_issue_id, action: 'error', error: message });
+    }
+  }
+  return results;
+}
+
+/**
+ * For the two-column UI: current state of every linked issue on both
+ * sides, so the person can see Revizto's version next to ACC's version.
+ */
+async function getLinkedIssuePairs(userId, project) {
+  const { rows } = await pool.query('SELECT revizto_issue_id, acc_issue_id FROM sync_map WHERE project_id = $1', [project.id]);
+  const pairs = [];
+  for (const row of rows) {
+    let reviztoSide = null;
+    let accSide = null;
+    try {
+      const issue = await reviztoService.getIssue(userId, project.revizto_region, project.revizto_project_uuid, row.revizto_issue_id);
+      reviztoSide = { title: issue.title?.value ?? issue.title, status: issue.status?.value ?? issue.status };
+    } catch (err) {
+      reviztoSide = { error: err.message };
+    }
+    try {
+      const issue = await accService.getIssue(userId, project, row.acc_issue_id);
+      accSide = { title: issue.title, status: issue.status };
+    } catch (err) {
+      accSide = { error: err.message };
+    }
+    pairs.push({ reviztoIssueId: row.revizto_issue_id, accIssueId: row.acc_issue_id, revizto: reviztoSide, acc: accSide });
+  }
+  return pairs;
+}
+
+// ─── Pull: ACC webhook event -> Revizto ───────────────────────────────
+
+async function handleAccWebhook(userId, project, payload, reporterEmail) {
+  const accIssueId = payload?.resourceUrn?.split('/').pop() || payload?.issueId;
+  if (!accIssueId) throw new Error('Webhook payload missing issue ID');
+
+  const reviztoIssueId = await getReviztoIdForAcc(project.id, accIssueId);
+  const accIssue = await accService.getIssue(userId, project, accIssueId);
+
+  if (!reviztoIssueId) {
+    // New issue created directly in ACC — not yet linked to a Revizto issue.
+    // We don't auto-create in Revizto without a clear source-of-truth
+    // decision (see README "Known limitations"); log and skip for now.
+    console.log(`[sync] ACC issue ${accIssueId} has no linked Revizto issue — skipping pull (create-in-Revizto not yet wired up).`);
+    return { action: 'skipped', reason: 'no linked Revizto issue' };
+  }
+
+  const newStatus = reviztoService.mapStatusFromAcc(accIssue.status);
+  await reviztoService.updateIssueStatus(
+    userId,
+    project.revizto_region,
+    project.revizto_project_uuid,
+    reviztoIssueId,
+    newStatus,
+    reporterEmail
+  );
+
+  if (accIssue.comments?.length) {
+    const latest = accIssue.comments[accIssue.comments.length - 1];
+    await reviztoService.addComment(
+      userId,
+      project.revizto_region,
+      project.revizto_project_uuid,
+      reviztoIssueId,
+      latest.body,
+      reporterEmail
+    );
+  }
+
+  return { action: 'pulled', reviztoIssueId, newStatus };
+}
+
+/**
+ * For the Issues page: every Revizto issue in the project, with its link
+ * status (if linked, includes the ACC side's current title/status too),
+ * plus fields the UI filters on.
+ *
+ * FIELD NAMES UNVERIFIED: `stamp`, `stampCategory`, `type`, and `assignee`
+ * below are best-guess field paths on Revizto's raw issue object — we
+ * don't have confirmed docs for these (unlike title/status/deadline, which
+ * came from working code). If filters show blank/wrong values once you
+ * have real data, check what field names Revizto's issue-filter response
+ * actually uses and fix the `unwrap(...)` calls below accordingly.
+ */
+async function getIssuesBoard(userId, project) {
+  const [issues, linkRows, stampPresets, reviztoTokens] = await Promise.all([
+    reviztoService.getIssues(userId, project.revizto_region, project.revizto_project_uuid),
+    pool.query('SELECT revizto_issue_id, acc_issue_id FROM sync_map WHERE project_id = $1', [project.id]).then((r) => r.rows),
+    reviztoService.getStampPresets(userId, project.revizto_region, project.revizto_project_uuid).catch(() => []),
+    tokenStore.getReviztoTokens(userId),
+  ]);
+  const linkMap = new Map(linkRows.map((r) => [String(r.revizto_issue_id), r.acc_issue_id]));
+  const { byAbbr: stampCategoryByAbbr } = reviztoService.buildStampCategoryLookup(stampPresets);
+  const stampTitleByAbbr = reviztoService.buildStampTitleLookup(stampPresets);
+
+  // Resolve assignee email -> display name via the license's member list.
+  // Uses the CALLING USER's own saved license (from their Revizto
+  // connection) as the license context — assumes the project was set up
+  // under that same license, which is true for the normal "browse my
+  // Revizto projects" setup flow. Falls back to showing the bare email if
+  // license isn't set or the person isn't found (e.g. assigned but not a
+  // license member, or a different license than assumed).
+  let assigneeNameByEmail = {};
+  if (reviztoTokens?.license_id) {
+    try {
+      const members = await reviztoService.getLicenseMembers(userId, project.revizto_region, reviztoTokens.license_id);
+      assigneeNameByEmail = reviztoService.buildMemberNameLookup(members);
+    } catch (err) {
+      console.warn('[issues-board] Could not fetch license members for assignee names:', err.response?.data?.message || err.message);
+    }
+  }
+
+  const board = [];
+  for (const issue of issues) {
+    const accIssueId = linkMap.get(String(issue.id)) || null;
+    let acc = null;
+    if (accIssueId) {
+      try {
+        const accIssue = await accService.getIssue(userId, project, accIssueId);
+        acc = { id: accIssueId, title: accIssue.title, status: accIssue.status };
+      } catch (err) {
+        acc = { id: accIssueId, error: err.response?.data?.detail || err.message };
+      }
+    }
+    // customStatusName / customTypeName are plain, ready-to-display strings
+    // Revizto returns alongside the UUID versions (customStatus/customType)
+    // — confirmed from a real raw issue response, no resolution needed.
+    const stampAbbr = reviztoService.unwrap(issue.stampAbbr) ?? null; // was incorrectly `issue.stamp` (doesn't exist)
+    const assigneeEmail = reviztoService.unwrap(issue.assignee) ?? null;
+    board.push({
+      id: issue.id,
+      title: reviztoService.unwrap(issue.title) || '(no title)',
+      status: reviztoService.unwrap(issue.customStatusName) ?? null,
+      issueType: reviztoService.unwrap(issue.customTypeName) ?? null,
+      // Display the stamp's human-readable title, not its raw abbreviation
+      // (the abbreviation is still what's used internally for type-mapping
+      // matching in toAccIssue — this is display-only).
+      stamp: stampAbbr ? stampTitleByAbbr[stampAbbr] || stampAbbr : null,
+      stampCategory: stampAbbr ? stampCategoryByAbbr[stampAbbr] || null : null,
+      // Show the resolved display name when we have one; fall back to the
+      // raw email (still used as the filter's matching value either way,
+      // so filtering behavior is unaffected by whether resolution worked).
+      assignee: assigneeEmail ? assigneeNameByEmail[assigneeEmail.toLowerCase()] || assigneeEmail : null,
+      tags: reviztoService.unwrap(issue.tags) || [],
+      linked: !!accIssueId,
+      acc,
+    });
+  }
+  return board;
+}
+
+/**
+ * Sync health stats for a project — issue counts on both sides, how many
+ * are linked, how many linked issues currently have an unresolved sync
+ * error. Open to any user (not admin-only) since this shows on the
+ * Issues page for everyone, and later the Analytics page.
+ */
+async function getSyncStats(userId, project) {
+  const [reviztoIssues, accIssues, syncRows] = await Promise.all([
+    reviztoService.getIssues(userId, project.revizto_region, project.revizto_project_uuid),
+    accService.getIssues(userId, project).catch(() => []),
+    pool.query('SELECT last_error FROM sync_map WHERE project_id = $1', [project.id]).then((r) => r.rows),
+  ]);
+  const errorCount = syncRows.filter((r) => r.last_error).length;
+  return {
+    reviztoCount: reviztoIssues.length,
+    accCount: accIssues.length,
+    syncedCount: syncRows.length,
+    errorCount,
+  };
+}
+
+module.exports = {
+  pushIssueToAcc,
+  pushAllOpenIssues,
+  pushSelectedIssues,
+  pushLinkedIssues,
+  getLinkedIssuePairs,
+  getIssuesBoard,
+  handleAccWebhook,
+  getAccIdForRevizto,
+  getReviztoIdForAcc,
+  recordLink,
+  getSyncStats,
+};

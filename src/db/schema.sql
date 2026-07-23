@@ -1,0 +1,151 @@
+-- Revizto <-> ACC Sync — schema
+-- Run once against your Postgres instance (Supabase/Neon/etc).
+-- Replaces the old app's local JSON files (revizto-tokens.json, syncMap.json)
+-- and in-memory token store with durable, multi-user storage.
+--
+-- MIGRATION PATTERN: CREATE TABLE IF NOT EXISTS only creates a table the
+-- FIRST time — it silently does nothing to a table that already exists,
+-- so adding a column here later does NOT retroactively add it to your
+-- live database (this bit us twice already). From now on, new columns on
+-- existing tables are added via explicit ALTER TABLE ... ADD COLUMN IF NOT
+-- EXISTS statements below the CREATE TABLE block, which ARE safe to re-run.
+
+CREATE TABLE IF NOT EXISTS users (
+  id            SERIAL PRIMARY KEY,
+  email         TEXT UNIQUE NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Role: 'admin' or 'standard'. Gates project setup/mapping and team
+-- management (not personal ACC/Revizto connections, which stay open to
+-- everyone). The first person to ever sign in is auto-promoted to admin
+-- (see routes/auth.js); promote/demote others via the Team page, or
+-- directly: UPDATE users SET role = 'admin' WHERE email = '...';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'standard';
+
+-- Log of team invites — the actual access grant is just the users row
+-- existing with a role; this table is a record of who invited whom and
+-- whether an email was actually sent (vs. just added to the list).
+CREATE TABLE IF NOT EXISTS invites (
+  id            SERIAL PRIMARY KEY,
+  email         TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'standard',
+  invited_by    INTEGER REFERENCES users(id),
+  email_sent    BOOLEAN NOT NULL DEFAULT false,
+  email_error   TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- One row per user holding their Autodesk/APS 3-legged OAuth tokens.
+CREATE TABLE IF NOT EXISTS acc_tokens (
+  user_id           INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  access_token      TEXT NOT NULL,
+  refresh_token     TEXT NOT NULL,
+  expires_at        TIMESTAMPTZ NOT NULL,
+  autodesk_user_id  TEXT,
+  autodesk_email    TEXT,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- One row per user holding their Revizto OAuth tokens.
+-- access token: ~1hr life. refresh token: ~1 month life (per Revizto docs;
+-- confirm with Revizto whether this is a hard expiry or resets on use).
+CREATE TABLE IF NOT EXISTS revizto_tokens (
+  user_id             INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  access_token        TEXT NOT NULL,
+  refresh_token       TEXT NOT NULL,
+  access_expires_at   TIMESTAMPTZ NOT NULL,
+  refresh_expires_at  TIMESTAMPTZ NOT NULL,
+  -- The region the access code was issued from (e.g. 'virginia', 'ireland').
+  -- Needed on every subsequent call, including refresh — was previously
+  -- hardcoded to 'virginia' everywhere, which breaks for non-US regions.
+  region              TEXT NOT NULL DEFAULT 'virginia',
+  -- Needed to call /project/list/{licenseUuid}/paged (the "browse my
+  -- Revizto projects" dropdown). Despite the column name, this stores the
+  -- license UUID (not the numeric license id) — that's what the documented
+  -- endpoint actually requires. Selected via dropdown once the user
+  -- connects; nullable because it's not required just to connect.
+  license_id          TEXT,
+  -- A license has its own region (from /user/licenses), which can differ
+  -- from the region the user's own account/token was issued in. Project
+  -- calls need to use the LICENSE's region, not assume it matches the
+  -- account's — captured at selection time from the dropdown.
+  license_region       TEXT,
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- A "project" ties one Revizto project to one ACC project.
+-- Multiple rows here is what lets this scale to multiple teams/customers later.
+CREATE TABLE IF NOT EXISTS projects (
+  id                      SERIAL PRIMARY KEY,
+  name                    TEXT NOT NULL,
+  revizto_project_uuid    TEXT NOT NULL,
+  revizto_region          TEXT NOT NULL DEFAULT 'virginia',
+  acc_hub_id              TEXT NOT NULL,
+  acc_project_id          TEXT NOT NULL,
+  acc_default_subtype_id  TEXT,
+  webhook_id              TEXT,
+  -- Automated (cron/webhook) syncs have no logged-in user, so they act
+  -- using this user's stored tokens. Must be someone who has connected
+  -- both ACC and Revizto. On-demand syncs triggered from the UI instead
+  -- use whichever user clicked the button.
+  owner_user_id           INTEGER REFERENCES users(id),
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Tracks which Revizto issue is linked to which ACC issue, per project.
+CREATE TABLE IF NOT EXISTS sync_map (
+  id                SERIAL PRIMARY KEY,
+  project_id        INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  revizto_issue_id  TEXT NOT NULL,
+  acc_issue_id      TEXT NOT NULL,
+  last_synced_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, revizto_issue_id),
+  UNIQUE (project_id, acc_issue_id)
+);
+
+-- Email -> Autodesk user ID mapping, per project (replaces REVIZTO_USER_MAP in .env).
+CREATE TABLE IF NOT EXISTS user_map (
+  id               SERIAL PRIMARY KEY,
+  project_id       INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  email            TEXT NOT NULL,
+  acc_autodesk_id  TEXT NOT NULL,
+  UNIQUE (project_id, email)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_map_project ON sync_map(project_id);
+CREATE INDEX IF NOT EXISTS idx_user_map_project ON user_map(project_id);
+
+-- Tracks the most recent sync error per linked issue, so the Setup page
+-- dashboard can show a real "# failed" count instead of errors only
+-- flashing in the UI momentarily when a push happens. NULL = last attempt
+-- succeeded (or never failed).
+ALTER TABLE sync_map ADD COLUMN IF NOT EXISTS last_error TEXT;
+ALTER TABLE sync_map ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ;
+
+-- Admin-configured status mapping, per project. Falls back to the
+-- hardcoded default mapping in reviztoService.mapStatusToAcc when no
+-- row exists for a given Revizto status (so existing projects don't
+-- break just because they haven't configured this yet).
+CREATE TABLE IF NOT EXISTS status_map (
+  id              SERIAL PRIMARY KEY,
+  project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  revizto_status  TEXT NOT NULL,
+  acc_status      TEXT NOT NULL,
+  UNIQUE (project_id, revizto_status)
+);
+
+-- Admin-configured issue-type mapping, per project. `revizto_type` is
+-- matched against whatever field ends up confirmed as Revizto's actual
+-- type/stamp-category field (see getIssuesBoard's unwrap attempts —
+-- still unverified as of this table's creation). Falls back to the
+-- hardcoded title-keyword matching in reviztoService when no row matches.
+CREATE TABLE IF NOT EXISTS type_map (
+  id              SERIAL PRIMARY KEY,
+  project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  revizto_type    TEXT NOT NULL,
+  acc_subtype_id  TEXT NOT NULL,
+  UNIQUE (project_id, revizto_type)
+);
+
+-- connect-pg-simple creates its own "session" table automatically on first run.
