@@ -315,6 +315,11 @@ router.get('/api/projects/:id/subtypes', requireAdmin, async (req, res) => {
 router.post('/webhook/acc', express.json(), async (req, res) => {
   res.status(200).send('ok'); // ack immediately; ACC expects a fast response
 
+  // TEMP DEBUG — remove once payload shape is confirmed. The assumed
+  // `hookScope.project` field turned out wrong (came back undefined on a
+  // real delivery); need to see the actual shape rather than guess again.
+  console.log('[webhook DEBUG] full raw payload:', JSON.stringify(req.body, null, 2));
+
   const { rows: projects } = await pool.query('SELECT * FROM projects');
   const project = projects.find((p) => req.body?.hookScope?.project === p.acc_project_id.replace(/^b\./, ''));
   if (!project || !project.owner_user_id) {
