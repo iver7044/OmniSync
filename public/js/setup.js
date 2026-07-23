@@ -264,6 +264,7 @@ async function loadProjects() {
       <button data-id="${p.id}" class="btn secondary register-webhook-btn">Register ACC webhook</button>
       <button data-id="${p.id}" class="btn secondary relink-webhook-btn">Find &amp; relink existing webhook</button>
       <button data-id="${p.id}" class="btn secondary check-webhook-btn">Check webhook status</button>
+      <button data-id="${p.id}" data-webhook-id="${p.webhook_id || ''}" class="btn secondary delete-webhook-btn">Delete webhook</button>
       <span class="webhook-result" data-id="${p.id}"></span>
     `;
     list.appendChild(row);
@@ -276,6 +277,25 @@ async function loadProjects() {
       try {
         await api(`/api/projects/${id}/register-webhook`, { method: 'POST' });
         resultEl.textContent = 'Webhook registered ✓';
+      } catch (err) {
+        resultEl.textContent = err.message;
+      }
+    });
+  });
+  list.querySelectorAll('.delete-webhook-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const hookId = btn.dataset.webhookId;
+      const resultEl = document.querySelector(`.webhook-result[data-id="${id}"]`);
+      if (!hookId) {
+        resultEl.textContent = 'No webhook_id on record — try "Check webhook status" or "Find & relink" first.';
+        return;
+      }
+      if (!confirm('Delete this webhook? You can re-register a fresh one after.')) return;
+      resultEl.textContent = 'Deleting...';
+      try {
+        await api(`/api/projects/${id}/webhook/${hookId}`, { method: 'DELETE' });
+        resultEl.textContent = 'Deleted ✓ — click "Register ACC webhook" to create a fresh one.';
       } catch (err) {
         resultEl.textContent = err.message;
       }
