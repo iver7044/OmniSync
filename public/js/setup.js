@@ -309,6 +309,44 @@ async function loadProjects() {
   });
 }
 
+// ─── Diagnostics: test webhook (webhook.site) ──────────────────────
+
+async function loadTestWebhookProjectOptions() {
+  const { projects } = await api('/api/projects');
+  const select = document.getElementById('test-webhook-project');
+  select.innerHTML = projects.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
+}
+loadTestWebhookProjectOptions();
+
+document.getElementById('register-test-webhook-btn').addEventListener('click', async () => {
+  const projectId = document.getElementById('test-webhook-project').value;
+  const callbackUrl = document.getElementById('test-webhook-url').value.trim();
+  const resultEl = document.getElementById('test-webhook-result');
+  if (!projectId || !callbackUrl) {
+    resultEl.textContent = 'Pick a project and paste a webhook.site URL first.';
+    return;
+  }
+  resultEl.textContent = 'Registering test webhook...';
+  try {
+    const { hookId } = await api(`/api/projects/${projectId}/register-test-webhook`, {
+      method: 'POST',
+      body: JSON.stringify({ callbackUrl }),
+    });
+    resultEl.innerHTML = `Registered ✓ (hookId: ${hookId}). Now change a status in ACC and check webhook.site. <button type="button" id="delete-test-webhook-btn" class="btn secondary">Delete test hook</button>`;
+    document.getElementById('delete-test-webhook-btn').addEventListener('click', async () => {
+      resultEl.textContent = 'Deleting...';
+      try {
+        await api(`/api/projects/${projectId}/webhook/${hookId}`, { method: 'DELETE' });
+        resultEl.textContent = 'Test hook deleted ✓';
+      } catch (err) {
+        resultEl.textContent = err.message;
+      }
+    });
+  } catch (err) {
+    resultEl.textContent = err.data?.error || err.message;
+  }
+});
+
 document.getElementById('project-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = new FormData(e.target);

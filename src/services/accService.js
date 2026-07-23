@@ -118,6 +118,24 @@ async function registerWebhook(userId, project, callbackUrl) {
 }
 
 /**
+ * Same as registerWebhook but for an arbitrary callback URL (e.g. a
+ * webhook.site test URL) — used purely to diagnose whether ACC's webhook
+ * delivery reaches ANY server at all, isolating our app/hosting from
+ * ACC's own delivery mechanism. Doesn't touch the projects table.
+ */
+async function registerTestWebhook(userId, project, callbackUrl) {
+  return registerWebhook(userId, project, callbackUrl);
+}
+
+async function deleteWebhook(userId, hookId) {
+  const token = await getValidAccToken(userId);
+  await axios.delete(
+    `${APS_BASE}/webhooks/v1/systems/autodesk.construction.issues/events/issue.updated-1.0/hooks/${hookId}`,
+    { headers: { Authorization: `Bearer ${token}`, 'x-ads-region': 'US' } }
+  );
+}
+
+/**
  * Fetches the real, current status of a registered webhook straight from
  * ACC — for diagnosing "it fired once, then stopped" without guessing.
  * Returns whatever Autodesk's own API says (status, dates, etc.).
@@ -175,6 +193,8 @@ module.exports = {
   registerWebhook,
   getWebhookStatus,
   listWebhooks,
+  registerTestWebhook,
+  deleteWebhook,
   getHubs,
   getHubProjects,
 };

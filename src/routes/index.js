@@ -200,6 +200,39 @@ router.get('/api/projects/:id/webhook-status', requireAdmin, async (req, res) =>
   }
 });
 
+// Diagnostic: register a webhook pointing at an arbitrary URL (e.g. a
+// webhook.site test URL), to isolate whether ACC's delivery reaches ANY
+// server, independent of our own app/hosting. Doesn't touch project.webhook_id.
+router.post('/api/projects/:id/register-test-webhook', requireAdmin, async (req, res) => {
+  const project = await _getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const { callbackUrl } = req.body;
+  if (!callbackUrl) return res.status(400).json({ error: 'callbackUrl required' });
+  try {
+    const hook = await accService.registerTestWebhook(req.session.userId, project, callbackUrl);
+    res.json({ ok: true, hookId: hook.hookId || hook.id, hook });
+  } catch (err) {
+    if (err instanceof ReconnectRequiredError) {
+      return res.status(409).json({ error: `Reconnect required: ${err.provider}`, reason: err.reason });
+    }
+    console.error('[register-test-webhook] Failed:', err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data?.detail || err.message });
+  }
+});
+
+router.delete('/api/projects/:id/webhook/:hookId', requireAdmin, async (req, res) => {
+  try {
+    await accService.deleteWebhook(req.session.userId, req.params.hookId);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof ReconnectRequiredError) {
+      return res.status(409).json({ error: `Reconnect required: ${err.provider}`, reason: err.reason });
+    }
+    console.error('[delete-webhook] Failed:', err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data?.detail || err.message });
+  }
+});
+
 // Actually tells ACC to start calling our /webhook/acc endpoint. Requires
 // PUBLIC_BASE_URL to be a real internet-reachable HTTPS URL — this will
 // fail (as it should) if run against localhost, since ACC's servers can't

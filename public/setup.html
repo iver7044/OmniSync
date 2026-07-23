@@ -68,6 +68,15 @@
               <button type="submit" class="btn">Add project</button>
             </form>
           </details>
+
+          <details>
+            <summary>🔧 Diagnostics: test webhook delivery (webhook.site)</summary>
+            <p class="hint">Paste a URL from <a href="https://webhook.site" target="_blank" rel="noopener">webhook.site</a> to test whether ACC's webhook delivery reaches ANY server at all, independent of this app. Remember to delete the test hook when done.</p>
+            <input id="test-webhook-url" type="text" placeholder="https://webhook.site/your-unique-id" />
+            <select id="test-webhook-project"></select>
+            <button type="button" id="register-test-webhook-btn" class="btn secondary">Register test webhook</button>
+            <div id="test-webhook-result" class="result-text"></div>
+          </details>
         </section>
       </div>
 
