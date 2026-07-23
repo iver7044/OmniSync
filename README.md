@@ -209,13 +209,34 @@ have) — flag if you want that built out next.
 
 ## Webhooks — registering the ACC side
 
-The receiving endpoint (`/webhook/acc`) always existed; what was missing was
-telling ACC to actually call it. Fixed via `POST /api/projects/:id/register-webhook`
+The receiving endpoint always existed; what was missing was telling ACC to
+actually call it. Fixed via `POST /api/projects/:id/register-webhook`
 (button: "Register ACC webhook" on each project row) — but this **requires
 `PUBLIC_BASE_URL` to be set to a real, internet-reachable HTTPS URL**. It will
 deliberately fail against `localhost`, since ACC's servers can't reach your
 laptop. Deploy first (see "Deployment" below), set `PUBLIC_BASE_URL` to that
 real URL, then click the button.
+
+**Hard-won discovery**: registrations against `/webhook/acc` stopped
+receiving deliveries at some point despite the hook showing `active` with
+a correct callback URL and scope — everything checked out except actual
+delivery. A curl test confirmed the endpoint itself was externally
+reachable; a control hook pointed at webhook.site worked instantly and
+repeatedly with identical config otherwise. Registering against a
+brand-new path (`/webhook/acc-v2`) fixed it immediately. Best working
+theory: Autodesk's delivery system tracks failure history **per callback
+URL**, independent of the hook resource's own ID, so recreating the hook
+doesn't help once a URL has enough failed delivery attempts against it
+(this URL genuinely failed repeatedly earlier — free-tier spin-down, a
+stale leftover ngrok hook). Not confirmed in Autodesk's own docs (the
+relevant page is JS-rendered and unreadable via fetch) — treat as a
+strong theory, not certainty.
+
+`register-webhook` now points at `/webhook/acc-v2` by default.
+`/webhook/acc` is still handled by the same code (kept alive in case it
+ever recovers) but nothing registers against it anymore. If delivery ever
+silently stops again, registering against yet another fresh path is the
+first thing to try before assuming something else broke.
 
 ## Adding a project pairing
 

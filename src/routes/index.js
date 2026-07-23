@@ -261,7 +261,14 @@ router.post('/api/projects/:id/register-webhook', requireAdmin, async (req, res)
     return res.status(400).json({ error: 'PUBLIC_BASE_URL must be set to your real deployed URL — webhooks cannot reach localhost.' });
   }
   try {
-    const callbackUrl = `${process.env.PUBLIC_BASE_URL}/webhook/acc`;
+    // Using /webhook/acc-v2, not /webhook/acc — real testing showed ACC's
+    // delivery system silently suppresses delivery to /webhook/acc (an
+    // identical hook pointing at a brand-new path worked immediately),
+    // most likely due to accumulated delivery-failure history against
+    // that specific URL from earlier in this project's testing. The old
+    // path is kept alive (still handled by the same code) in case it
+    // recovers on its own over time, but new registrations use v2.
+    const callbackUrl = `${process.env.PUBLIC_BASE_URL}/webhook/acc-v2`;
     const hook = await accService.registerWebhook(req.session.userId, project, callbackUrl);
     await pool.query('UPDATE projects SET webhook_id = $2 WHERE id = $1', [project.id, hook.hookId || hook.id || null]);
     res.json({ ok: true, hook });
@@ -421,7 +428,15 @@ async function _handleAccWebhookRequest(req, res) {
   }
 
   try {
-    await syncService.handleAccWebhook(project.owner_user_id, project, req.body.payload, req.session?.userEmail);
+    // req.session?.userEmail was always undefined here — a webhook POST
+    // from ACC carries no session cookie, so this silently sent
+    // `reporter: undefined` (dropped entirely by JSON.stringify) to
+    // Revizto's comment API, which likely accepted the request but never
+    // actually applied the status diff. Use the project owner's real
+    // email instead, since their token is what's doing the work anyway.
+    const { rows: ownerRows } = await pool.query('SELECT email FROM users WHERE id = $1', [project.owner_user_id]);
+    const reporterEmail = ownerRows[0]?.email;
+    await syncService.handleAccWebhook(project.owner_user_id, project, req.body.payload, reporterEmail);
   } catch (err) {
     console.error('[webhook] Processing failed:', err.message);
   }

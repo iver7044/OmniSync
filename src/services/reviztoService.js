@@ -130,6 +130,12 @@ async function updateIssueStatus(userId, region, projectUuid, issueId, newStatus
   const { data } = await axios.post(`${baseUrl(region)}/comment/add`, form, {
     headers: { Authorization: `Bearer ${token}`, ...form.getHeaders() },
   });
+  // Revizto's API can return HTTP 200 with a non-zero `result` code
+  // indicating a logical failure (e.g. missing/invalid reporter) — axios
+  // only throws on HTTP-level errors, so this was invisible before.
+  if (data?.result !== 0) {
+    console.warn('[revizto] updateIssueStatus call returned non-success result:', JSON.stringify(data));
+  }
   return data;
 }
 
