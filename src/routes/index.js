@@ -184,6 +184,22 @@ router.post('/api/projects/:id/relink-webhook', requireAdmin, async (req, res) =
   }
 });
 
+// Raw, unfiltered dump of every hook for this event system the token can
+// see — bypasses our own project-matching logic entirely, for cases where
+// that logic might be missing something (e.g. a subtle scope format
+// mismatch) rather than trusting our own filter.
+router.get('/api/debug/list-all-webhooks', requireAdmin, async (req, res) => {
+  try {
+    const hooks = await accService.listWebhooks(req.session.userId);
+    res.json({ count: hooks.length, hooks });
+  } catch (err) {
+    if (err instanceof ReconnectRequiredError) {
+      return res.status(409).json({ error: `Reconnect required: ${err.provider}`, reason: err.reason });
+    }
+    res.status(500).json({ error: err.response?.data?.detail || err.message });
+  }
+});
+
 router.get('/api/projects/:id/webhook-status', requireAdmin, async (req, res) => {
   const project = await _getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
