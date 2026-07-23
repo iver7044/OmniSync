@@ -223,7 +223,13 @@ async function getLinkedIssuePairs(userId, project) {
 // ─── Pull: ACC webhook event -> Revizto ───────────────────────────────
 
 async function handleAccWebhook(userId, project, payload, reporterEmail) {
-  const accIssueId = payload?.resourceUrn?.split('/').pop() || payload?.issueId;
+  // Confirmed from a real webhook delivery: payload.id is the clean ACC
+  // issue ID directly. The old fallback (parsing resourceUrn by splitting
+  // on '/') was actually broken — resourceUrn is colon-delimited
+  // ("urn:adsk.issues:issues.issue:<id>"), so splitting on '/' returned
+  // the whole URN unchanged, not the ID. Fixed the fallback to split on
+  // ':' instead, in case payload.id is ever absent.
+  const accIssueId = payload?.id || payload?.resourceUrn?.split(':').pop();
   if (!accIssueId) throw new Error('Webhook payload missing issue ID');
 
   const reviztoIssueId = await getReviztoIdForAcc(project.id, accIssueId);
