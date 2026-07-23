@@ -38,11 +38,11 @@ app.use(
 );
 
 app.use((req, res, next) => {
-  if (req.path === '/webhook/acc') return next(); // needs raw handling in its own route
+  if (req.path === '/webhook/acc' || req.path === '/webhook/acc-v2') return next(); // needs raw handling in its own route
   express.json()(req, res, next);
 });
 app.use((req, res, next) => {
-  if (req.path === '/webhook/acc') return next();
+  if (req.path === '/webhook/acc' || req.path === '/webhook/acc-v2') return next();
   express.urlencoded({ extended: true })(req, res, next);
 });
 

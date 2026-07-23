@@ -405,8 +405,10 @@ router.get('/api/projects/:id/subtypes', requireAdmin, async (req, res) => {
 // as a TODO — Autodesk's exact signature scheme should be confirmed
 // against current APS webhook docs before going live, rather than assumed.
 
-router.post('/webhook/acc', express.json(), async (req, res) => {
+async function _handleAccWebhookRequest(req, res) {
   res.status(200).send('ok'); // ack immediately; ACC expects a fast response
+
+  console.log(`[webhook] Received on ${req.path}`);
 
   // Confirmed from a real webhook delivery: scope is nested under
   // hook.scope.project, not top-level hookScope.project as originally
@@ -423,7 +425,17 @@ router.post('/webhook/acc', express.json(), async (req, res) => {
   } catch (err) {
     console.error('[webhook] Processing failed:', err.message);
   }
-});
+}
+
+router.post('/webhook/acc', express.json(), _handleAccWebhookRequest);
+
+// TEMP DIAGNOSTIC: a brand-new, never-before-used path, to test whether
+// Autodesk's delivery system is suppressing delivery specifically to
+// /webhook/acc based on its past failure history (a common pattern in
+// webhook systems generally — the hook resource can show "active" while
+// delivery to a specific previously-failing URL is quietly suppressed).
+// If this path works where /webhook/acc doesn't, that confirms it.
+router.post('/webhook/acc-v2', express.json(), _handleAccWebhookRequest);
 
 async function _getProject(id) {
   const { rows } = await pool.query('SELECT * FROM projects WHERE id = $1', [id]);
