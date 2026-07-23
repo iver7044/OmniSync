@@ -262,6 +262,7 @@ async function loadProjects() {
       <span>Revizto: ${p.revizto_project_uuid} (${p.revizto_region})</span>
       <span>ACC: ${p.acc_project_id}</span>
       <button data-id="${p.id}" class="btn secondary register-webhook-btn">Register ACC webhook</button>
+      <button data-id="${p.id}" class="btn secondary relink-webhook-btn">Find &amp; relink existing webhook</button>
       <button data-id="${p.id}" class="btn secondary check-webhook-btn">Check webhook status</button>
       <span class="webhook-result" data-id="${p.id}"></span>
     `;
@@ -277,6 +278,19 @@ async function loadProjects() {
         resultEl.textContent = 'Webhook registered ✓';
       } catch (err) {
         resultEl.textContent = err.message;
+      }
+    });
+  });
+  list.querySelectorAll('.relink-webhook-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const resultEl = document.querySelector(`.webhook-result[data-id="${id}"]`);
+      resultEl.textContent = 'Searching for existing webhook...';
+      try {
+        const { hookId } = await api(`/api/projects/${id}/relink-webhook`, { method: 'POST' });
+        resultEl.textContent = `Relinked ✓ (hookId: ${hookId})`;
+      } catch (err) {
+        resultEl.textContent = err.data?.error || err.message;
       }
     });
   });

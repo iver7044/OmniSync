@@ -131,6 +131,21 @@ async function getWebhookStatus(userId, hookId) {
   return data;
 }
 
+/**
+ * Lists all currently registered hooks for this event (across all
+ * projects the token can see), for finding an existing hook whose ID
+ * never got saved locally — e.g. if the create-response's ID field name
+ * assumption was wrong. Returns the raw list; caller filters by scope.
+ */
+async function listWebhooks(userId) {
+  const token = await getValidAccToken(userId);
+  const { data } = await axios.get(
+    `${APS_BASE}/webhooks/v1/systems/autodesk.construction.issues/events/issue.updated-1.0/hooks`,
+    { headers: { Authorization: `Bearer ${token}`, 'x-ads-region': 'US' } }
+  );
+  return data?.data || data?.hooks || data || [];
+}
+
 // ─── Hubs / Projects (Data Management API — for the "browse ACC" dropdowns) ─
 
 async function getHubs(userId) {
@@ -159,6 +174,7 @@ module.exports = {
   getProjectMembers,
   registerWebhook,
   getWebhookStatus,
+  listWebhooks,
   getHubs,
   getHubProjects,
 };

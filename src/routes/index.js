@@ -157,6 +157,33 @@ router.get('/api/projects/:id/linked-issues', requireLogin, async (req, res) => 
   }
 });
 
+// Finds an existing hook for this project (registered previously but
+// whose ID never got saved locally — root cause: the ID field name in
+// the create-response wasn't what the code assumed) and repairs the DB.
+// Also logs the raw response so we can confirm the real field name for
+// good, instead of continuing to guess.
+router.post('/api/projects/:id/relink-webhook', requireAdmin, async (req, res) => {
+  const project = await _getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  try {
+    const hooks = await accService.listWebhooks(req.session.userId);
+    console.log('[relink-webhook] raw hooks list:', JSON.stringify(hooks, null, 2));
+    const containerId = project.acc_project_id.replace(/^b\./, '');
+    const match = hooks.find((h) => h.scope?.project === containerId);
+    if (!match) return res.status(404).json({ error: 'No existing hook found on ACC for this project — try registering instead.' });
+    const hookId = match.hookId || match.id;
+    if (!hookId) return res.status(500).json({ error: 'Found a matching hook but could not determine its ID field — check server logs for the raw response.' });
+    await pool.query('UPDATE projects SET webhook_id = $2 WHERE id = $1', [project.id, hookId]);
+    res.json({ ok: true, hookId, raw: match });
+  } catch (err) {
+    if (err instanceof ReconnectRequiredError) {
+      return res.status(409).json({ error: `Reconnect required: ${err.provider}`, reason: err.reason });
+    }
+    console.error('[relink-webhook] Failed:', err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data?.detail || err.message });
+  }
+});
+
 router.get('/api/projects/:id/webhook-status', requireAdmin, async (req, res) => {
   const project = await _getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
