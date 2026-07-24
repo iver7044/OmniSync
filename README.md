@@ -170,6 +170,27 @@ changes in ACC don't actually show up in Revizto, since the diff shape
 might need adjusting (e.g., a different field key, or a completely
 different endpoint) once we see a real failure response.
 
+## Multi-workflow status fix
+
+Confirmed from real docs (`GET /project/{uuid}/issue-workflow/settings`):
+a Revizto project can have **multiple workflows**, and each **issue type**
+(not each issue directly) is linked to exactly one workflow via
+`workflowUuid`. Each workflow only recognizes a subset of the project's
+overall status list — so two different workflows can each define a status
+named e.g. "In progress" with two different UUIDs.
+
+The old code built one flat `{name: uuid}` map from the project-wide
+status list, so if two workflows shared a status name, whichever one got
+processed last silently won — and that could easily be the wrong
+workflow's version for the specific issue being updated, producing errors
+like `"The workflow with uuid X does not connected to status with uuid Y"`.
+
+Fixed: status resolution now goes issue → its `customType` → that type's
+`workflowUuid` → that workflow's own valid status list, and only matches
+a status name within that set. Falls back to a project-wide name match
+if the type/workflow lookup doesn't resolve (e.g. issue has no type set),
+rather than refusing outright.
+
 ## Comment sync (latest comment only, both directions)
 
 Symmetric with the existing ACC→Revizto behavior (which also only pulls

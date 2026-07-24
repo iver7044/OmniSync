@@ -83,15 +83,61 @@ async function getIssue(userId, region, projectUuid, issueId) {
   return issues[0];
 }
 
-let _workflowCache = {};
-async function getStatusMap(userId, region, projectUuid) {
-  if (_workflowCache[projectUuid]) return _workflowCache[projectUuid];
+let _workflowSettingsCache = {};
+
+/**
+ * Full workflow settings: { workflows[], types[], statuses[] } — confirmed
+ * from real docs. Cached per project since this rarely changes.
+ */
+async function getWorkflowSettings(userId, region, projectUuid) {
+  if (_workflowSettingsCache[projectUuid]) return _workflowSettingsCache[projectUuid];
   const response = await request(userId, region, 'GET', `/project/${projectUuid}/issue-workflow/settings`);
-  const statuses = response.data?.statuses || [];
+  const settings = response.data || { workflows: [], types: [], statuses: [] };
+  _workflowSettingsCache[projectUuid] = settings;
+  return settings;
+}
+
+/**
+ * Simple { name: uuid } map for display purposes (e.g. the admin mapping
+ * dropdown) — NOT safe to use for writing a status to a specific issue,
+ * since a project with multiple workflows can have multiple statuses
+ * sharing the same name but different UUIDs (see updateIssueStatus,
+ * which resolves this correctly via the issue's own workflow).
+ */
+async function getStatusMap(userId, region, projectUuid) {
+  const settings = await getWorkflowSettings(userId, region, projectUuid);
   const map = {};
-  for (const s of statuses) map[s.name] = s.uuid;
-  _workflowCache[projectUuid] = map;
+  for (const s of settings.statuses || []) {
+    if (!s.deletedAt) map[s.name] = s.uuid;
+  }
   return map;
+}
+
+/**
+ * Resolves a target status NAME to the correct UUID for a SPECIFIC
+ * issue, respecting which workflow actually governs it. An issue's
+ * workflow is determined by its issue TYPE (customType), not the issue
+ * directly — each type has one workflowUuid, and each workflow only
+ * recognizes a subset of the project's overall status list. Falls back
+ * to any project-wide match by name if the type/workflow lookup fails,
+ * rather than refusing outright.
+ */
+async function _resolveStatusUuidForIssue(userId, region, projectUuid, issue, statusName) {
+  const settings = await getWorkflowSettings(userId, region, projectUuid);
+  const typeUuid = issue.customType?.value || null;
+  const type = (settings.types || []).find((t) => t.uuid === typeUuid);
+  const workflow = type ? (settings.workflows || []).find((w) => w.uuid === type.workflowUuid) : null;
+
+  if (workflow) {
+    const validUuids = new Set((workflow.statuses || []).filter((s) => !s.deletedAt).map((s) => s.uuid));
+    const match = (settings.statuses || []).find((s) => s.name === statusName && validUuids.has(s.uuid));
+    if (match) return match.uuid;
+  }
+
+  // Fallback: any project-wide match by name, in case type/workflow
+  // lookup didn't resolve (e.g. issue has no customType set).
+  const fallback = (settings.statuses || []).find((s) => s.name === statusName && !s.deletedAt);
+  return fallback?.uuid || null;
 }
 
 /**
@@ -128,10 +174,9 @@ async function updateIssueStatus(userId, region, projectUuid, issueId, newStatus
   const issue = await getIssue(userId, region, projectUuid, issueId);
   const oldStatusUuid = issue.customStatus?.value || null;
 
-  const statusMap = await getStatusMap(userId, region, projectUuid);
-  const newStatusUuid = statusMap[newStatusName];
+  const newStatusUuid = await _resolveStatusUuidForIssue(userId, region, projectUuid, issue, newStatusName);
   if (!newStatusUuid) {
-    console.warn('[revizto] Status not found in workflow:', newStatusName);
+    console.warn('[revizto] Status not found for this issue\'s workflow:', newStatusName);
     return null;
   }
   if (oldStatusUuid === newStatusUuid) return null; // no-op, avoid empty-diff rejection
