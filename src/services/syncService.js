@@ -170,7 +170,7 @@ async function _pushLatestCommentToAcc(userId, project, reviztoIssue, accIssueId
     );
     if (rows[0]?.last_pushed_comment_uuid === latest.uuid) return; // already pushed
 
-    await accService.addComment(userId, project, accIssueId, latest.text || '');
+    await accService.addComment(userId, project, accIssueId, `${latest.text || ''} - synced from Revizto`);
     await pool.query(
       'UPDATE sync_map SET last_pushed_comment_uuid = $3 WHERE project_id = $1 AND revizto_issue_id = $2',
       [project.id, String(reviztoIssue.id), latest.uuid]
@@ -330,17 +330,10 @@ async function handleAccWebhook(userId, project, payload, reporterEmail) {
     console.warn('[webhook] Could not sync assignee/watchers back to Revizto (skipping):', err.response?.data?.message || err.message);
   }
 
-  if (accIssue.comments?.length) {
-    const latest = accIssue.comments[accIssue.comments.length - 1];
-    await reviztoService.addComment(
-      userId,
-      project.revizto_region,
-      project.revizto_project_uuid,
-      reviztoIssueId,
-      latest.body,
-      reporterEmail
-    );
-  }
+  // Comment pulling from ACC happens via pollAccCommentsForProject (see
+  // pollService.js), not here — accIssue.comments never populated from
+  // this base GET (confirmed: comments are a separate endpoint), so this
+  // block was dead code and has been removed.
 
   return { action: 'pulled', reviztoIssueId, newStatus };
 }
@@ -464,14 +457,19 @@ async function pollAccCommentsForProject(userId, project, reporterEmail) {
       if (!comments.length) continue;
       const latest = comments[comments.length - 1];
       const latestId = latest.id || latest.commentId;
-      if (!latestId || latestId === row.last_pulled_acc_comment_id) continue; // nothing new
+      // String() coercion is deliberate: ACC's comment ID is likely a
+      // number, but row.last_pulled_acc_comment_id always comes back as
+      // a string from the TEXT column — a strict === would silently fail
+      // every single comparison (12345 !== "12345"), causing the same
+      // comment to re-push every poll cycle forever.
+      if (!latestId || String(latestId) === String(row.last_pulled_acc_comment_id)) continue; // nothing new
 
       await reviztoService.addComment(
         userId,
         project.revizto_region,
         project.revizto_project_uuid,
         row.revizto_issue_id,
-        latest.body || latest.text || '',
+        `${latest.body || latest.text || ''} - synced from ACC`,
         reporterEmail
       );
       await pool.query(
