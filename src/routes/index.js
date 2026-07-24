@@ -41,9 +41,8 @@ router.get('/api/revizto/projects', requireLogin, async (req, res) => {
     // tokens.license_id now holds the license UUID (not the numeric id) —
     // see reviztoService.getProjects for why.
     const items = await reviztoService.getProjects(req.session.userId, tokens.region, tokens.license_id);
-    // FIELD MAPPING UNVERIFIED: guessing uuid/name based on convention —
-    // confirm against real ProjectListItem docs/response and fix if wrong.
-    const projects = items.map((p) => ({ uuid: p.uuid, title: p.title || p.name }));
+    // id/uuid/title confirmed from real ProjectListItem docs.
+    const projects = items.map((p) => ({ id: p.id, uuid: p.uuid, title: p.title || p.name }));
     res.json({ projects });
   } catch (err) {
     console.error('[revizto] getProjects failed:', err.response?.data || err.message);
@@ -107,17 +106,26 @@ router.get('/api/projects', requireLogin, async (req, res) => {
 });
 
 router.post('/api/projects', requireAdmin, async (req, res) => {
-  const { name, revizto_project_uuid, revizto_region, acc_hub_id, acc_project_id, acc_default_subtype_id, makeMeOwner } =
-    req.body;
+  const {
+    name,
+    revizto_project_uuid,
+    revizto_project_id,
+    revizto_region,
+    acc_hub_id,
+    acc_project_id,
+    acc_default_subtype_id,
+    makeMeOwner,
+  } = req.body;
   if (!name || !revizto_project_uuid || !acc_hub_id || !acc_project_id) {
     return res.status(400).json({ error: 'name, revizto_project_uuid, acc_hub_id, acc_project_id are required' });
   }
   const { rows } = await pool.query(
-    `INSERT INTO projects (name, revizto_project_uuid, revizto_region, acc_hub_id, acc_project_id, acc_default_subtype_id, owner_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    `INSERT INTO projects (name, revizto_project_uuid, revizto_project_id, revizto_region, acc_hub_id, acc_project_id, acc_default_subtype_id, owner_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
     [
       name,
       revizto_project_uuid,
+      revizto_project_id || null,
       revizto_region || 'virginia',
       acc_hub_id,
       acc_project_id,
@@ -373,6 +381,17 @@ router.get('/api/projects/:id/revizto-issues', requireLogin, async (req, res) =>
     console.error('[revizto] listing issues for selection failed:', err.response?.data || err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+router.patch('/api/projects/:id/revizto-project-id', requireAdmin, async (req, res) => {
+  const { revizto_project_id } = req.body;
+  if (!revizto_project_id) return res.status(400).json({ error: 'revizto_project_id required' });
+  const { rows } = await pool.query('UPDATE projects SET revizto_project_id = $2 WHERE id = $1 RETURNING *', [
+    req.params.id,
+    revizto_project_id,
+  ]);
+  if (!rows[0]) return res.status(404).json({ error: 'Project not found' });
+  res.json({ project: rows[0] });
 });
 
 router.post('/api/projects/:id/sync', requireLogin, async (req, res) => {

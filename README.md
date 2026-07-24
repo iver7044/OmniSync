@@ -160,6 +160,41 @@ Data Management API discovery did. If assignee/watchers start failing
 broadly (not just for people missing from the project), that's the first
 thing to check — and if you get an answer, corrections/updates welcome.
 
+**ACC→Revizto now also pulls assignee and watchers**, not just status —
+resolved from ACC's Autodesk user IDs to emails via the same project
+members list used for the forward direction, just inverted. **Unconfirmed
+caveat**: the actual Revizto write mechanism (`assignee`/`watchers` diff
+comments) is extrapolated from the proven `customStatus` pattern, not
+confirmed against real docs — test it and report back if assignee/watcher
+changes in ACC don't actually show up in Revizto, since the diff shape
+might need adjusting (e.g., a different field key, or a completely
+different endpoint) once we see a real failure response.
+
+## Comment sync (latest comment only, both directions)
+
+Symmetric with the existing ACC→Revizto behavior (which also only pulls
+the latest comment): Revizto→ACC now pushes the latest **text** comment
+too (skips diff/file/markup comment types — pushing those as garbled text
+to ACC wouldn't make sense). Tracked via `sync_map.last_pushed_comment_uuid`
+so the 2-minute auto-resync doesn't repost the same comment every cycle.
+
+**Needs a one-time backfill for existing projects**: this required adding
+the Revizto project's **numeric ID** (separate from the UUID used
+everywhere else — `GET /issue/{uuid}/comments/date` oddly wants the
+numeric one). New projects capture this automatically from the dropdown;
+existing ones show a small "Missing numeric Revizto project ID" prompt on
+the Setup page — find the number in Revizto (visible via `Get license
+projects`, or ask your Revizto contact) and save it there once.
+
+**Unconfirmed**: the `text` field name on a GET comment response is
+extrapolated from the POST/write shape (`{type: 'text', text: '...'}`),
+not confirmed from a real GET response — if pushed comments show up
+blank or garbled in ACC, that field name is the first thing to check.
+
+**Migration needed**: `projects.revizto_project_id` and
+`sync_map.last_pushed_comment_uuid` (idempotent `ALTER TABLE`). Run
+`npm run migrate`.
+
 ## Field mapping (status & issue type)
 
 On `/setup`, pick a project to configure how Revizto's statuses/types map

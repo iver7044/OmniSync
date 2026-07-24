@@ -124,15 +124,60 @@ async function pushIssueToAcc(userId, project, reviztoIssue) {
     assigneeResolver,
   });
 
+  let accIssueId;
   if (existingAccId) {
     const updated = await accService.updateIssue(userId, project, existingAccId, payload);
     await clearSyncError(project.id, reviztoIssue.id);
-    return { action: 'updated', accIssue: updated };
+    accIssueId = existingAccId;
+  } else {
+    const created = await accService.createIssue(userId, project, payload);
+    await recordLink(project.id, reviztoIssue.id, created.id);
+    accIssueId = created.id;
   }
 
-  const created = await accService.createIssue(userId, project, payload);
-  await recordLink(project.id, reviztoIssue.id, created.id);
-  return { action: 'created', accIssue: created };
+  await _pushLatestCommentToAcc(userId, project, reviztoIssue, accIssueId);
+
+  return existingAccId ? { action: 'updated', accIssue: { id: accIssueId } } : { action: 'created', accIssue: { id: accIssueId } };
+}
+
+/**
+ * Pushes only the LATEST Revizto text comment to ACC, mirroring the
+ * existing ACC->Revizto direction (which also only pulls the latest).
+ * Skips if the same comment was already pushed last time (tracked via
+ * sync_map.last_pushed_comment_uuid), so the 2-minute auto-resync doesn't
+ * repost it every cycle. UNCONFIRMED: the `text` field name on a GET
+ * comment response is extrapolated from the POST/write shape, not
+ * confirmed from real GET response data — check if pushed comments show
+ * up blank/garbled.
+ */
+async function _pushLatestCommentToAcc(userId, project, reviztoIssue, accIssueId) {
+  if (!project.revizto_project_id) {
+    console.warn(`[sync] Project "${project.name}" has no numeric revizto_project_id set — skipping comment sync. Set it on the Setup page.`);
+    return;
+  }
+  try {
+    const latest = await reviztoService.getLatestTextComment(
+      userId,
+      project.revizto_region,
+      reviztoIssue.uuid,
+      project.revizto_project_id
+    );
+    if (!latest) return;
+
+    const { rows } = await pool.query(
+      'SELECT last_pushed_comment_uuid FROM sync_map WHERE project_id = $1 AND revizto_issue_id = $2',
+      [project.id, String(reviztoIssue.id)]
+    );
+    if (rows[0]?.last_pushed_comment_uuid === latest.uuid) return; // already pushed
+
+    await accService.addComment(userId, project, accIssueId, latest.text || '');
+    await pool.query(
+      'UPDATE sync_map SET last_pushed_comment_uuid = $3 WHERE project_id = $1 AND revizto_issue_id = $2',
+      [project.id, String(reviztoIssue.id), latest.uuid]
+    );
+  } catch (err) {
+    console.warn(`[sync] Could not push latest comment for issue ${reviztoIssue.id} (skipping):`, err.response?.data || err.message);
+  }
 }
 
 async function pushAllOpenIssues(userId, project) {
@@ -252,6 +297,38 @@ async function handleAccWebhook(userId, project, payload, reporterEmail) {
     newStatus,
     reporterEmail
   );
+
+  // Assignee/watchers: ACC gives us Autodesk user IDs, Revizto needs
+  // emails — resolve via the same project members list already used for
+  // the forward (Revizto->ACC) direction, just inverted. Wrapped in its
+  // own try/catch so a resolution failure here doesn't take down the
+  // status update above, which already succeeded.
+  try {
+    const members = await accService.getProjectMembers(userId, project);
+    const emailByAutodeskId = Object.fromEntries(
+      members.filter((m) => m.autodeskId && m.email).map((m) => [m.autodeskId, m.email])
+    );
+
+    const assignedToId = payload?.assignedTo;
+    if (assignedToId) {
+      const email = emailByAutodeskId[assignedToId];
+      if (email) {
+        await reviztoService.updateIssueAssignee(userId, project.revizto_region, project.revizto_project_uuid, reviztoIssueId, email, reporterEmail);
+      } else {
+        console.warn('[webhook] Could not resolve ACC assignee to an email (not found in project members):', assignedToId);
+      }
+    }
+
+    const watcherIds = Array.isArray(payload?.watchers) ? payload.watchers : [];
+    if (watcherIds.length) {
+      const watcherEmails = watcherIds.map((id) => emailByAutodeskId[id]).filter(Boolean);
+      if (watcherEmails.length) {
+        await reviztoService.updateIssueWatchers(userId, project.revizto_region, project.revizto_project_uuid, reviztoIssueId, watcherEmails, reporterEmail);
+      }
+    }
+  } catch (err) {
+    console.warn('[webhook] Could not sync assignee/watchers back to Revizto (skipping):', err.response?.data?.message || err.message);
+  }
 
   if (accIssue.comments?.length) {
     const latest = accIssue.comments[accIssue.comments.length - 1];

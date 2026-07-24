@@ -237,13 +237,23 @@ async function loadReviztoProjectOptions() {
       select.innerHTML = '<option value="">No Revizto projects found</option>';
       return;
     }
-    select.innerHTML = projects.map((p) => `<option value="${p.uuid}">${p.title} (${p.uuid})</option>`).join('');
+    select.innerHTML = projects
+      .map((p) => `<option value="${p.uuid}" data-project-id="${p.id}">${p.title} (${p.uuid})</option>`)
+      .join('');
+    updateReviztoProjectIdHidden();
   } catch (err) {
     select.innerHTML = '<option value="">—</option>';
     errorEl.textContent = err.data?.message || err.message || 'Connect Revizto on My Connections first.';
   }
 }
 
+function updateReviztoProjectIdHidden() {
+  const select = document.getElementById('revizto-project-select');
+  const selected = select.options[select.selectedIndex];
+  document.getElementById('revizto-project-id-hidden').value = selected?.dataset.projectId || '';
+}
+
+document.getElementById('revizto-project-select').addEventListener('change', updateReviztoProjectIdHidden);
 document.getElementById('revizto-project-refresh').addEventListener('click', loadReviztoProjectOptions);
 
 async function loadProjects() {
@@ -266,6 +276,14 @@ async function loadProjects() {
       <button data-id="${p.id}" class="btn secondary check-webhook-btn">Check webhook status</button>
       <button data-id="${p.id}" data-webhook-id="${p.webhook_id || ''}" class="btn secondary delete-webhook-btn">Delete webhook</button>
       <span class="webhook-result" data-id="${p.id}"></span>
+      ${
+        p.revizto_project_id
+          ? ''
+          : `<div class="hint">Missing numeric Revizto project ID (needed for comment sync) —
+              <input type="number" class="revizto-project-id-input" placeholder="numeric ID" style="width:100px" />
+              <button data-id="${p.id}" class="btn secondary save-revizto-project-id-btn">Save</button>
+            </div>`
+      }
     `;
     list.appendChild(row);
   }
@@ -280,6 +298,20 @@ async function loadProjects() {
         await loadProjects();
       } catch (err) {
         resultEl.textContent = err.message;
+      }
+    });
+  });
+  list.querySelectorAll('.save-revizto-project-id-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const input = btn.previousElementSibling;
+      const value = input.value.trim();
+      if (!value) return;
+      try {
+        await api(`/api/projects/${id}/revizto-project-id`, { method: 'PATCH', body: JSON.stringify({ revizto_project_id: value }) });
+        await loadProjects();
+      } catch (err) {
+        alert(err.message);
       }
     });
   });

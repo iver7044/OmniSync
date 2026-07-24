@@ -123,6 +123,17 @@ CREATE INDEX IF NOT EXISTS idx_user_map_project ON user_map(project_id);
 ALTER TABLE sync_map ADD COLUMN IF NOT EXISTS last_error TEXT;
 ALTER TABLE sync_map ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ;
 
+-- Numeric Revizto project ID (distinct from the UUID used everywhere
+-- else) — needed specifically for GET /issue/{uuid}/comments/date, which
+-- oddly wants this instead of the UUID. NULL for projects created before
+-- this was added; comment sync won't work for those until re-saved.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS revizto_project_id INTEGER;
+
+-- Tracks the last comment UUID we've already pushed to ACC for each
+-- linked issue, so the 2-minute auto-resync doesn't re-post the same
+-- "latest comment" over and over.
+ALTER TABLE sync_map ADD COLUMN IF NOT EXISTS last_pushed_comment_uuid TEXT;
+
 -- Admin-configured status mapping, per project. Falls back to the
 -- hardcoded default mapping in reviztoService.mapStatusToAcc when no
 -- row exists for a given Revizto status (so existing projects don't

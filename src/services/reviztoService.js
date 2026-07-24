@@ -94,18 +94,15 @@ async function getStatusMap(userId, region, projectUuid) {
   return map;
 }
 
-async function updateIssueStatus(userId, region, projectUuid, issueId, newStatusName, reporterEmail) {
-  const issue = await getIssue(userId, region, projectUuid, issueId);
-  const issueUuid = issue.uuid;
-  const oldStatusUuid = issue.customStatus?.value || null;
-
-  const statusMap = await getStatusMap(userId, region, projectUuid);
-  const newStatusUuid = statusMap[newStatusName];
-  if (!newStatusUuid) {
-    console.warn('[revizto] Status not found in workflow:', newStatusName);
-    return null;
-  }
-
+/**
+ * Posts a "diff" comment to Revizto — the proven mechanism (confirmed
+ * working for status) for writing a field change. `diff` is an object
+ * like { fieldName: { old, new } }. Includes a no-op guard: Revizto's API
+ * rejects an empty diff (confirmed from real testing — "Diff can not be
+ * empty"), so callers should avoid calling this when old === new, but as
+ * a backstop this also skips posting if diff has no actual keys.
+ */
+async function _postDiffComment(userId, region, projectUuid, issueUuid, diff, reporterEmail) {
   const commentUuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
@@ -114,32 +111,60 @@ async function updateIssueStatus(userId, region, projectUuid, issueId, newStatus
   const form = new FormData();
   form.append('projectUuid', projectUuid);
   form.append('issueUuid', issueUuid);
-  form.append(
-    'comments',
-    JSON.stringify([
-      {
-        type: 'diff',
-        uuid: commentUuid,
-        reporter: reporterEmail,
-        diff: { customStatus: { old: oldStatusUuid, new: newStatusUuid } },
-      },
-    ])
-  );
+  form.append('comments', JSON.stringify([{ type: 'diff', uuid: commentUuid, reporter: reporterEmail, diff }]));
 
   const token = await getValidReviztoToken(userId);
   const { data } = await axios.post(`${baseUrl(region)}/comment/add`, form, {
     headers: { Authorization: `Bearer ${token}`, ...form.getHeaders() },
   });
-  // NOTE: the top-level `result` field on this endpoint is NOT a simple
-  // 0=success indicator like other Revizto endpoints — confirmed from a
-  // real successful call that returned result:30 with the update fully
-  // applied. The real success/failure signal is nested per-comment in
-  // `data.data[].result` (0 = that comment succeeded).
   const commentResult = data?.data?.[0]?.result;
   if (commentResult !== undefined && commentResult !== 0) {
-    console.warn('[revizto] updateIssueStatus comment failed:', JSON.stringify(data));
+    console.warn('[revizto] diff comment failed:', JSON.stringify(data));
   }
   return data;
+}
+
+async function updateIssueStatus(userId, region, projectUuid, issueId, newStatusName, reporterEmail) {
+  const issue = await getIssue(userId, region, projectUuid, issueId);
+  const oldStatusUuid = issue.customStatus?.value || null;
+
+  const statusMap = await getStatusMap(userId, region, projectUuid);
+  const newStatusUuid = statusMap[newStatusName];
+  if (!newStatusUuid) {
+    console.warn('[revizto] Status not found in workflow:', newStatusName);
+    return null;
+  }
+  if (oldStatusUuid === newStatusUuid) return null; // no-op, avoid empty-diff rejection
+
+  return _postDiffComment(userId, region, projectUuid, issue.uuid, { customStatus: { old: oldStatusUuid, new: newStatusUuid } }, reporterEmail);
+}
+
+/**
+ * Updates an issue's assignee. UNCONFIRMED: extrapolated from the proven
+ * customStatus diff pattern — assignee is a plain email (like customStatus
+ * is a plain UUID), so the same { fieldName: { old, new } } shape is a
+ * reasonable bet, but this hasn't been confirmed against real Revizto
+ * docs the way status was. Test and report back if it doesn't work.
+ */
+async function updateIssueAssignee(userId, region, projectUuid, issueId, newAssigneeEmail, reporterEmail) {
+  const issue = await getIssue(userId, region, projectUuid, issueId);
+  const oldAssignee = unwrap(issue.assignee) || null;
+  if (oldAssignee === newAssigneeEmail) return null; // no-op
+  return _postDiffComment(userId, region, projectUuid, issue.uuid, { assignee: { old: oldAssignee, new: newAssigneeEmail } }, reporterEmail);
+}
+
+/**
+ * Updates an issue's watchers (full replacement, not additive). Same
+ * UNCONFIRMED caveat as updateIssueAssignee — extrapolated pattern, not
+ * confirmed docs.
+ */
+async function updateIssueWatchers(userId, region, projectUuid, issueId, newWatcherEmails, reporterEmail) {
+  const issue = await getIssue(userId, region, projectUuid, issueId);
+  const oldWatchers = unwrap(issue.watchers) || [];
+  const sameSet =
+    oldWatchers.length === newWatcherEmails.length && oldWatchers.every((w) => newWatcherEmails.includes(w));
+  if (sameSet) return null; // no-op
+  return _postDiffComment(userId, region, projectUuid, issue.uuid, { watchers: { old: oldWatchers, new: newWatcherEmails } }, reporterEmail);
 }
 
 async function addComment(userId, region, projectUuid, issueId, text, reporterEmail) {
@@ -190,6 +215,42 @@ function buildMemberNameLookup(members) {
     if (m.user?.email && m.user?.fullname) byEmail[m.user.email.toLowerCase()] = m.user.fullname;
   }
   return byEmail;
+}
+
+/**
+ * GET /v5/issue/{issueUuid}/comments/date — comments added on/after
+ * `date`. Oddly wants the project's NUMERIC id (not the UUID used
+ * everywhere else) as a separate param. Returns mixed comment types
+ * (text/file/diff/markup); sorted oldest-first per docs.
+ */
+async function getIssueComments(userId, region, issueUuid, projectId, date = '2000-01-01', page = 0) {
+  const all = [];
+  let currentPage = page;
+  let totalPages = 1;
+  while (currentPage < totalPages) {
+    const response = await request(userId, region, 'GET', `/issue/${issueUuid}/comments/date`, {
+      params: { date, projectId, page: currentPage },
+    });
+    const items = response.data?.data || [];
+    all.push(...items);
+    totalPages = response.data?.pages || 1;
+    currentPage++;
+  }
+  return all;
+}
+
+/**
+ * Returns the single most recent TEXT comment on an issue, or null if
+ * there isn't one (e.g. only diff/file/markup comments exist, or no
+ * comments at all). Non-text comments are skipped rather than pushed as
+ * garbled text to ACC.
+ */
+async function getLatestTextComment(userId, region, issueUuid, projectId) {
+  const comments = await getIssueComments(userId, region, issueUuid, projectId);
+  for (let i = comments.length - 1; i >= 0; i--) {
+    if (comments[i].type === 'text') return comments[i];
+  }
+  return null;
 }
 
 async function getProjects(userId, region, licenseUuid, { page = 0, limit = 100, type = 'default' } = {}) {
@@ -465,6 +526,8 @@ module.exports = {
   getIssues,
   getIssue,
   updateIssueStatus,
+  updateIssueAssignee,
+  updateIssueWatchers,
   addComment,
   getProjects,
   getLicenses,
@@ -475,6 +538,8 @@ module.exports = {
   buildStampCategoryLookup,
   buildStampTitleLookup,
   buildStampOptions,
+  getIssueComments,
+  getLatestTextComment,
   toAccIssue,
   mapStatusFromAcc,
   mapStatusToAcc,
