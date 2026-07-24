@@ -72,6 +72,24 @@ async function addComment(userId, project, issueId, comment) {
   return data;
 }
 
+/**
+ * GET .../issues/{issueId}/comments — confirmed to exist as a real
+ * endpoint (distinct from the base issue GET, which does NOT include
+ * comments inline) via an official third-party SDK usage example. The
+ * exact response field names are NOT independently confirmed for GET —
+ * extrapolated from the POST shape ({body: comment} -> assume `.body`
+ * holds text on read too). Returns oldest-first; unconfirmed, sorted
+ * defensively by createdAt if present.
+ */
+async function getIssueComments(userId, project, issueId) {
+  const { token, baseURL } = await _client(userId, project);
+  const { data } = await axios.get(`${baseURL}/issues/${issueId}/comments`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const comments = data?.results || data?.data || [];
+  return comments.slice().sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+}
+
 async function getIssueSubtypes(userId, project) {
   const { token, baseURL } = await _client(userId, project);
   const { data } = await axios.get(`${baseURL}/issue-types`, {
@@ -188,6 +206,7 @@ module.exports = {
   createIssue,
   updateIssue,
   addComment,
+  getIssueComments,
   getIssueSubtypes,
   getProjectMembers,
   registerWebhook,

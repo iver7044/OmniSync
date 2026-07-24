@@ -445,6 +445,45 @@ async function getSyncStats(userId, project) {
   };
 }
 
+/**
+ * Polling-based ACC->Revizto comment sync — no webhook event exists for
+ * comments (confirmed: Autodesk's Supported Events Reference only lists
+ * issue.created/updated/deleted/restored/unlinked for Construction
+ * Issues, nothing comment-specific), so this has to actively check
+ * rather than react to a push notification. Called on the same 2-minute
+ * cycle as the existing Revizto->ACC auto-resync.
+ */
+async function pollAccCommentsForProject(userId, project, reporterEmail) {
+  const { rows } = await pool.query(
+    'SELECT revizto_issue_id, acc_issue_id, last_pulled_acc_comment_id FROM sync_map WHERE project_id = $1',
+    [project.id]
+  );
+  for (const row of rows) {
+    try {
+      const comments = await accService.getIssueComments(userId, project, row.acc_issue_id);
+      if (!comments.length) continue;
+      const latest = comments[comments.length - 1];
+      const latestId = latest.id || latest.commentId;
+      if (!latestId || latestId === row.last_pulled_acc_comment_id) continue; // nothing new
+
+      await reviztoService.addComment(
+        userId,
+        project.revizto_region,
+        project.revizto_project_uuid,
+        row.revizto_issue_id,
+        latest.body || latest.text || '',
+        reporterEmail
+      );
+      await pool.query(
+        'UPDATE sync_map SET last_pulled_acc_comment_id = $3 WHERE project_id = $1 AND revizto_issue_id = $2',
+        [project.id, row.revizto_issue_id, latestId]
+      );
+    } catch (err) {
+      console.warn(`[poll] Could not check ACC comments for issue ${row.acc_issue_id} (skipping):`, err.response?.data?.detail || err.message);
+    }
+  }
+}
+
 module.exports = {
   pushIssueToAcc,
   pushAllOpenIssues,
@@ -457,4 +496,5 @@ module.exports = {
   getReviztoIdForAcc,
   recordLink,
   getSyncStats,
+  pollAccCommentsForProject,
 };

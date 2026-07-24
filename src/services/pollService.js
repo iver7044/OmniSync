@@ -16,9 +16,16 @@ async function pollAllProjects() {
   for (const project of projects) {
     try {
       const results = await syncService.pushLinkedIssues(project.owner_user_id, project);
-      if (!results.length) continue; // nothing linked yet — normal, not worth logging every cycle
-      const errors = results.filter((r) => r.action === 'error');
-      console.log(`[poll] "${project.name}": ${results.length} linked issue(s) re-synced, ${errors.length} errors`);
+      if (results.length) {
+        const errors = results.filter((r) => r.action === 'error');
+        console.log(`[poll] "${project.name}": ${results.length} linked issue(s) re-synced, ${errors.length} errors`);
+      }
+
+      // No webhook event exists for ACC comments, so this has to
+      // actively poll rather than react — same cycle as the push above.
+      const { rows: ownerRows } = await pool.query('SELECT email FROM users WHERE id = $1', [project.owner_user_id]);
+      const reporterEmail = ownerRows[0]?.email;
+      await syncService.pollAccCommentsForProject(project.owner_user_id, project, reporterEmail);
     } catch (err) {
       if (err instanceof ReconnectRequiredError) {
         console.warn(`[poll] Project "${project.name}" owner needs to reconnect ${err.provider}: ${err.reason}`);

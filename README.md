@@ -193,11 +193,31 @@ rather than refusing outright.
 
 ## Comment sync (latest comment only, both directions)
 
-Symmetric with the existing ACC→Revizto behavior (which also only pulls
-the latest comment): Revizto→ACC now pushes the latest **text** comment
-too (skips diff/file/markup comment types — pushing those as garbled text
-to ACC wouldn't make sense). Tracked via `sync_map.last_pushed_comment_uuid`
-so the 2-minute auto-resync doesn't repost the same comment every cycle.
+Symmetric with... actually not fully symmetric anymore, see below:
+
+- **Revizto → ACC**: pushed when the issue itself is synced (manual link or
+  the 2-minute auto-resync), via `_pushLatestCommentToAcc`. Skips
+  diff/file/markup comment types — only text comments push.
+- **ACC → Revizto**: **polling-based**, not webhook-based. Confirmed from
+  Autodesk's own Supported Events Reference: Construction Issues webhooks
+  only cover `issue.created/updated/deleted/restored/unlinked` — there is
+  no comment-specific event, so a comment added in ACC never triggers our
+  webhook at all (confirmed by real testing — nothing arrives). Instead,
+  `pollAccCommentsForProject` runs on the same 2-minute cycle as the
+  Revizto→ACC auto-resync, checking each linked issue's ACC comments and
+  pushing any new one into Revizto. Tracked via
+  `sync_map.last_pulled_acc_comment_id` so the same comment doesn't get
+  re-pushed every cycle.
+
+**Both directions only sync the single latest comment**, not full
+history or an ongoing thread — matches what was asked for, not a
+limitation to work around later unless you want more.
+
+**Unconfirmed**: the GET comments response's field names (`.body`, `.id`,
+`.createdAt`) are extrapolated from the *POST* endpoint's confirmed shape
+(`{body: comment}`) — the actual GET response schema was never directly
+confirmed from docs or real data. If pulled ACC comments show up blank,
+or new comments aren't detected, this mapping is the first thing to check.
 
 **Needs a one-time backfill for existing projects**: this required adding
 the Revizto project's **numeric ID** (separate from the UUID used
@@ -207,13 +227,9 @@ existing ones show a small "Missing numeric Revizto project ID" prompt on
 the Setup page — find the number in Revizto (visible via `Get license
 projects`, or ask your Revizto contact) and save it there once.
 
-**Unconfirmed**: the `text` field name on a GET comment response is
-extrapolated from the POST/write shape (`{type: 'text', text: '...'}`),
-not confirmed from a real GET response — if pushed comments show up
-blank or garbled in ACC, that field name is the first thing to check.
-
-**Migration needed**: `projects.revizto_project_id` and
-`sync_map.last_pushed_comment_uuid` (idempotent `ALTER TABLE`). Run
+**Migration needed**: `projects.revizto_project_id`,
+`sync_map.last_pushed_comment_uuid`, and
+`sync_map.last_pulled_acc_comment_id` (idempotent `ALTER TABLE`). Run
 `npm run migrate`.
 
 ## Field mapping (status & issue type)

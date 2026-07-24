@@ -134,6 +134,13 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS revizto_project_id INTEGER;
 -- "latest comment" over and over.
 ALTER TABLE sync_map ADD COLUMN IF NOT EXISTS last_pushed_comment_uuid TEXT;
 
+-- Tracks the last ACC comment ID we've already pulled into Revizto, for
+-- the polling-based comment sync (no webhook event exists for comments —
+-- confirmed from Autodesk's own Supported Events Reference, which only
+-- lists issue.created/updated/deleted/restored/unlinked, nothing
+-- comment-specific).
+ALTER TABLE sync_map ADD COLUMN IF NOT EXISTS last_pulled_acc_comment_id TEXT;
+
 -- Admin-configured status mapping, per project. Falls back to the
 -- hardcoded default mapping in reviztoService.mapStatusToAcc when no
 -- row exists for a given Revizto status (so existing projects don't
